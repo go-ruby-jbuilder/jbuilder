@@ -308,7 +308,7 @@ func TestStringEscaping(t *testing.T) {
 		{"\u2028\u2029", `"\u2028\u2029"`},
 		{"\x01\x1f", `"\u0001\u001f"`},
 		{"caf\u00e9 \u2615", "\"caf\u00e9 \u2615\""}, // non-ASCII stays literal UTF-8
-		{"a/b", `"a/b"`},                           // forward slash is NOT escaped
+		{"a/b", `"a/b"`},                             // forward slash is NOT escaped
 		{"", `""`},
 		{"\x7f", "\"\x7f\""}, // DEL stays literal
 	}
