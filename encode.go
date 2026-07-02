@@ -172,11 +172,21 @@ func encodeString(b *strings.Builder, s string) {
 	b.WriteByte('"')
 }
 
-// formatRubyFloat renders f the way Ruby's Float#to_s does — the shortest decimal
-// that round-trips, always with a decimal point, switching to `e` notation only
-// when the decimal point sits beyond Ruby's fixed-notation window (decpt > 15 or
-// decpt <= -4). This differs from Go's %g (which drops trailing `.0`, and uses
-// exponents at different thresholds), so JSON numbers match the gem byte-for-byte.
+// formatRubyFloat renders f the way jbuilder emits it — via Ruby's json gem
+// Float#to_json (which target! uses), not Float#to_s. It is the shortest round-
+// tripping decimal, always with a decimal point, switching to `e` notation only
+// when the point sits past the fixed-notation window: below decpt < -8 (so 1e-9
+// stays 0.000000001 but 1e-10 becomes 1e-10) or above decpt > 15 with the point
+// at/after the last significant digit (1e15 → 1e+15). The exponent mantissa
+// carries no forced `.0` (1e+15, not to_s's 1.0e+15).
+//
+// Digits come from Go's shortest-round-trip formatter (Ryū). Ryū and Ruby's
+// dtoa agree for every value expressible in 15 or fewer significant digits — i.e.
+// every number a JSON payload realistically carries — and are byte-identical
+// there. They can pick a different final digit only for the ~16–17-significant-
+// digit values that sit exactly on a ULP tie, where the two libraries' tie-break
+// heuristics differ (and where even Ruby's own Float#to_s and to_json disagree);
+// those extremes are outside the parity guarantee.
 func formatRubyFloat(f float64) string {
 	switch {
 	case math.IsNaN(f):
@@ -210,15 +220,16 @@ func formatRubyFloat(f float64) string {
 	digits := strings.Replace(mant, ".", "", 1)
 	decpt := exp + 1
 
-	// Ruby's flo_to_s switches to exponent notation when the decimal point falls
-	// outside its fixed window. Empirically (matching MRI byte-for-byte): exp when
-	// the point is more than four places left of the first digit (decpt <= -4,
-	// e.g. 1e-5), or when it sits past the 15-integer-digit ceiling *and* at or
-	// beyond the last significant digit (decpt > 15 && decpt >= len(digits), e.g.
-	// 1e15 or 9999999999999998.0). A long value whose significant digits reach
-	// past the point (1234567890123456.8, decpt 16 but 17 digits) stays fixed.
+	// The json gem switches to exponent notation when the decimal point falls
+	// outside its fixed window. Empirically (matching the gem byte-for-byte): exp
+	// when the point is more than eight places left of the first digit
+	// (decpt < -8, e.g. 1e-10 — but 1e-9 stays fixed), or when it sits past the
+	// 15-integer-digit ceiling *and* at or beyond the last significant digit
+	// (decpt > 15 && decpt >= len(digits), e.g. 1e15 or 9999999999999998.0). A
+	// long value whose significant digits reach past the point
+	// (1234567890123456.7, decpt 16 but 17 digits) stays fixed.
 	var out string
-	if decpt <= -4 || (decpt > 15 && decpt >= len(digits)) {
+	if decpt < -8 || (decpt > 15 && decpt >= len(digits)) {
 		out = rubyExp(digits, decpt)
 	} else {
 		out = rubyFixed(digits, decpt)
@@ -268,16 +279,16 @@ func rubyFixed(digits string, decpt int) string {
 	return b.String()
 }
 
-// rubyExp formats the digits in Ruby's exponent style: "d.ddde±NN" with a signed,
-// at-least-two-digit exponent and a mandatory fractional part ("1.0e+15").
+// rubyExp formats the digits in the json gem's exponent style: "de±NN" or
+// "d.ddde±NN" with a signed, at-least-two-digit exponent. Unlike Float#to_s, a
+// single-digit mantissa carries no fractional part ("1e+15", not "1.0e+15"); the
+// point appears only when there are trailing significant digits.
 func rubyExp(digits string, decpt int) string {
 	var b strings.Builder
 	b.WriteByte(digits[0])
-	b.WriteByte('.')
 	if len(digits) > 1 {
+		b.WriteByte('.')
 		b.WriteString(digits[1:])
-	} else {
-		b.WriteByte('0')
 	}
 	b.WriteByte('e')
 	e := decpt - 1
@@ -287,10 +298,9 @@ func rubyExp(digits string, decpt int) string {
 	} else {
 		b.WriteByte('+')
 	}
-	es := strconv.Itoa(e)
-	if len(es) < 2 {
-		b.WriteByte('0')
-	}
-	b.WriteString(es)
+	// In the json gem's format the exponent is always at least two digits, and
+	// exponent notation is only ever reached for |e| >= 8 (decpt < -8 or > 15), so
+	// strconv.Itoa already yields two or more digits here — no zero-padding needed.
+	b.WriteString(strconv.Itoa(e))
 	return b.String()
 }
