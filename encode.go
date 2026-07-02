@@ -150,15 +150,15 @@ func encodeString(b *strings.Builder, s string) {
 		case '\r':
 			b.WriteString(`\r`)
 		case '<':
-			b.WriteString(`<`)
+			b.WriteString(`\u003c`)
 		case '>':
-			b.WriteString(`>`)
+			b.WriteString(`\u003e`)
 		case '&':
-			b.WriteString(`&`)
-		case ' ':
-			b.WriteString(` `)
-		case ' ':
-			b.WriteString(` `)
+			b.WriteString(`\u0026`)
+		case '\u2028':
+			b.WriteString(`\u2028`)
+		case '\u2029':
+			b.WriteString(`\u2029`)
 		default:
 			if r < 0x20 {
 				b.WriteString(`\u00`)
@@ -210,8 +210,15 @@ func formatRubyFloat(f float64) string {
 	digits := strings.Replace(mant, ".", "", 1)
 	decpt := exp + 1
 
+	// Ruby's flo_to_s switches to exponent notation when the decimal point falls
+	// outside its fixed window. Empirically (matching MRI byte-for-byte): exp when
+	// the point is more than four places left of the first digit (decpt <= -4,
+	// e.g. 1e-5), or when it sits past the 15-integer-digit ceiling *and* at or
+	// beyond the last significant digit (decpt > 15 && decpt >= len(digits), e.g.
+	// 1e15 or 9999999999999998.0). A long value whose significant digits reach
+	// past the point (1234567890123456.8, decpt 16 but 17 digits) stays fixed.
 	var out string
-	if decpt > 15 || decpt <= -4 {
+	if decpt <= -4 || (decpt > 15 && decpt >= len(digits)) {
 		out = rubyExp(digits, decpt)
 	} else {
 		out = rubyFixed(digits, decpt)
